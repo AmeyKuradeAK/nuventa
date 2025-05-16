@@ -29,19 +29,17 @@ export default function Suggestion() {
   }, [hash, url_param.slug]);
 
   return (
-    <div className="cards flex flex-wrap gap-x-5 gap-y-10 w-fit mx-auto">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6 lg:gap-8 w-full">
       {products
         .slice(0, Math.min(5, products.length))
         .map((product: any, index: any) => (
           <Card
             key={index}
-            id={product._id}
+            id="f43ce2c2-99f3-4b6a-9acc-1ef48a157176"
             src={product.productImages[0]}
             productName={product.productName}
             productPrice={product.productPrice}
             cancelledPrice={product.cancelledProductPrice}
-            reviews={product.productReviews.length}
-            stars={product.productStars}
             status={product.latest ? "new" : "old"}
           />
         ))}

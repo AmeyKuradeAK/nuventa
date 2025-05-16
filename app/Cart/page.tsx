@@ -1,254 +1,294 @@
 "use client";
-import React, { useContext, useEffect, useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import axios from "axios";
-import { GlobalContext } from "@/context/Global";
-import Button from "@/components/button";
+import Image from "next/image";
 import { motion } from "framer-motion";
+import { useUser } from "@clerk/nextjs";
+import Alert from "@/components/Alert";
+import { Trash2, Minus, Plus } from "lucide-react";
 
 const logo = "/logo.png";
 
-const CartTotal = ({ subtotal }: { subtotal: number }) => {
-  return (
-    <div className=" rounded-md p-10 w-full md:w-80 sm:m-0 m-auto border-4 border-black flex flex-col gap-3 ">
-      <h2 className="text-lg font-semibold mb-4">Cart Total</h2>
-      <div className="flex justify-between mb-2">
-        <span>Subtotal:</span>
-        <span>Rs. {subtotal}</span>
-      </div>
-      <div className="flex justify-between mb-4">
-        <span>Shipping:</span>
-        <span>Free</span>
-      </div>
-      <div className="flex justify-between font-semibold text-lg">
-        <span>Total:</span>
-        <span>Rs. {subtotal}</span>
-      </div>
-      <div className="w-[90%] sm:w-[250px]">
-        <Button text="Proceed to Checkout" width={250} />
-      </div>
-    </div>
-  );
-};
+interface CartProduct {
+  _id: string;
+  name: string;
+  price: number;
+  image: string;
+  quantity: number;
+  description?: string;
+  category?: string;
+  stock?: number;
+  formattedPrice: string;
+  cancelledPrice?: number;
+  formattedCancelledPrice?: string;
+}
+
+interface AlertState {
+  show: boolean;
+  message: string;
+  type: "success" | "error";
+}
 
 const CartPage = () => {
-  const [morphedProducts, setMorphedProducts] = useState<any[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const { isSignedIn } = useUser();
+  const [cartProducts, setCartProducts] = useState<CartProduct[]>([]);
   const [quantities, setQuantities] = useState<{ [key: string]: number }>({});
+  const [morphedProducts, setMorphedProducts] = useState<CartProduct[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [alert, setAlert] = useState<AlertState>({
+    show: false,
+    message: "",
+    type: "success",
+  });
 
-  const context = useContext(GlobalContext);
-  if (!context) {
-    throw new Error("GlobalContext is not provided.");
-  }
+  const showAlert = useCallback((message: string, type: "success" | "error") => {
+    setAlert({ show: true, message, type });
+  }, []);
 
-  const { GlobalCart, changeGlobalCart } = context;
+  const hideAlert = useCallback(() => {
+    setAlert((prev) => ({ ...prev, show: false }));
+  }, []);
 
-  const asyncHandler = async () => {
+  const asyncHandler = useCallback(async () => {
     try {
-      const response = await axios
-        .post(`/api/propagation`, {
-          every: true,
-        })
-        .then((res) => {
-          if (res.data === 404) {
-            alert(
-              "there was an error fetching cart products, please try again after refreshing the page."
-            );
-            alert("redirecting to home page.");
-            window.location.href = "/";
-          } else {
-            setMorphedProducts(res.data === null ? [] : res.data);
-          }
-        });
+      const response = await axios.get<CartProduct[]>("/api/cart");
+
+      if (response.status === 200 && response.data) {
+        setCartProducts(response.data);
+        const initialQuantities = response.data.reduce(
+          (acc: { [key: string]: number }, product: CartProduct) => {
+            acc[product._id] = product.quantity || 1;
+            return acc;
+          },
+          {}
+        );
+        setQuantities(initialQuantities);
+        setMorphedProducts(response.data);
+      } else {
+        throw new Error("Invalid response format");
+      }
     } catch (error) {
-      console.error("Error fetching products:", error);
+      console.error("Error fetching cart:", error);
+      const axiosError = error as { response?: { status: number } };
+      if (axiosError.response?.status === 404) {
+        setCartProducts([]);
+        setMorphedProducts([]);
+      } else {
+        showAlert("Failed to fetch cart items", "error");
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, [showAlert]);
 
   useEffect(() => {
-    asyncHandler();
-  }, []);
+    if (isSignedIn) {
+      asyncHandler();
+    }
+  }, [isSignedIn, asyncHandler]);
 
-  const handleQuantityChange = (id: string, value: number) => {
+  const handleQuantityChange = useCallback((productId: string, newQuantity: number) => {
+    if (newQuantity < 1) return;
     setQuantities((prev) => ({
       ...prev,
-      [id]: value < 1 ? 1 : value,
+      [productId]: newQuantity,
     }));
-  };
+  }, []);
 
-  const calculateSubtotal = () => {
-    return morphedProducts.reduce((total, item) => {
-      if (!GlobalCart.includes(item._id)) return total;
-      return total + (quantities[item._id] || 1) * item.productPrice;
+  const calculateSubtotal = useCallback(() => {
+    return morphedProducts.reduce((total, product) => {
+      const quantity = quantities[product._id] || 1;
+      return total + product.price * quantity;
     }, 0);
-  };
+  }, [morphedProducts, quantities]);
 
-  const handleRemoveItem = async (id: string) => {
-    console.log(`Remove item with ID: ${id}`);
-    const response = await axios
-      .post(`/api/cart`, {
-        append: false,
-        identifier: id,
-      })
-      .then((res) => {
-        if (res.data === 404) {
-          alert("There was a problem setting data in the context.");
-        } else if (res.data === 200) {
-          changeGlobalCart((prevGlobalCart: any) => {
-            return prevGlobalCart.filter((element: any) => {
-              element != id;
-            });
-          });
-        }
-      });
-  };
+  const removeFromCart = useCallback(async (productId: string) => {
+    setMorphedProducts((prev) => prev.filter((product) => product._id !== productId));
+
+    try {
+      const response = await axios.delete(`/api/cart?productId=${productId}`);
+
+      if (response.status === 200) {
+        showAlert("Item removed from cart", "success");
+      } else {
+        await asyncHandler();
+        throw new Error("Failed to remove item");
+      }
+    } catch (error) {
+      console.error("Error removing item:", error);
+      showAlert("Failed to remove item from cart", "error");
+      await asyncHandler();
+    }
+  }, [asyncHandler, showAlert]);
+
+  if (!isSignedIn) {
+    return (
+      <div className="min-h-screen flex flex-col">
+        <Navbar />
+        <div className="flex-1 flex justify-center items-center px-4">
+          <p className="text-lg text-gray-600">Please sign in to view your cart.</p>
+        </div>
+        <Footer />
+      </div>
+    );
+  }
 
   return (
-    <>
-      <div>
-        {loading && (
-          <motion.div
-            className="w-fit mx-auto mt-20"
-            animate={{
-              rotate: 360,
-              transition: {
-                duration: 1.5,
-              },
-            }}
-          >
-            <img src={logo} alt="preloader" width={60} height={60} />
-          </motion.div>
-        )}
-        {!loading && (
-          <>
-            <Navbar />
-            <div className="p-4 flex justify-center">
-              <div className="flex flex-col w-[80vw] space-y-4 mt-16">
-                <div className="hidden md:flex flex-row items-center justify-between h-[72px] w-full border rounded-sm bg-white px-4">
-                  <h1 className="flex-[2] text-left">Product</h1>
-                  <h1 className="flex-[1] text-center">Price</h1>
-                  <h1 className="flex-[2] text-center">Quantity</h1>
-                  <h1 className="flex-[1] text-center">Subtotal</h1>
-                </div>
+    <div className="min-h-screen flex flex-col bg-gray-50">
+      <Navbar />
+      {alert.show && (
+        <Alert
+          message={alert.message}
+          type={alert.type}
+          onClose={hideAlert}
+        />
+      )}
+      <main className="flex-1 container mx-auto px-4 sm:px-6 lg:px-8 py-8 max-w-[2560px] 2xl:px-16 4xl:px-32 4xl:min-h-[90vh]">
+        <div className="mb-6 4xl:mb-24">
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbLink href="/" className="text-gray-600 hover:text-gray-900 4xl:text-3xl">Home</BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem>
+                <BreadcrumbPage className="text-gray-900 4xl:text-3xl">Cart</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+        </div>
 
-                {morphedProducts.map((item) => {
-                  if (!GlobalCart.includes(item._id)) return null;
-
-                  return (
-                    <div
-                      key={item._id}
-                      className="flex flex-col md:flex-row items-center justify-between border rounded-sm bg-white p-4 space-y-4 md:space-y-0"
+        {loading ? (
+          <div className="flex justify-center items-center min-h-[400px] 4xl:min-h-[1000px]">
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+            >
+              <Image src={logo} alt="Loading..." width={60} height={60} className="4xl:w-40 4xl:h-40" />
+            </motion.div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 4xl:gap-24 4xl:min-h-[80vh]">
+            <div className="lg:col-span-2">
+              <div className="bg-white rounded-lg shadow-sm p-6 4xl:p-20 4xl:min-h-[80vh]">
+                <h1 className="text-2xl font-semibold text-gray-900 mb-6 4xl:text-6xl 4xl:mb-20">Shopping Cart</h1>
+                {morphedProducts.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 4xl:py-40">
+                    <p className="text-gray-500 text-lg mb-4 4xl:text-4xl 4xl:mb-12">Your cart is empty</p>
+                    <a
+                      href="/"
+                      className="text-[#DB4444] hover:text-[#c13a3a] font-medium 4xl:text-3xl"
                     >
-                      <div className="relative flex-[2] flex items-center space-x-4">
-                        <img
-                          src={item.productImages[0]}
-                          alt={item.productName}
-                          className="w-12 h-12 object-cover rounded"
-                        />
-                        <button
-                          onClick={() => handleRemoveItem(item._id)}
-                          className="absolute top-[-16px] left-[-20px] text-red-500 bg-none rounded-[50%] p-1 hover:bg-red-100"
-                          aria-label="Remove item"
-                        >
-                          <img
-                            src="/cancel.png"
-                            alt="Remove"
-                            className="w-4 h-4 object-contain"
-                          />
-                        </button>
-                        <h1 className="text-left">{item.productName}</h1>
+                      Continue Shopping
+                    </a>
+                  </div>
+                ) : (
+                  <div className="space-y-6 4xl:space-y-20">
+                    {morphedProducts.map((product) => (
+                      <div
+                        key={product._id}
+                        className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4 border-b last:border-b-0 4xl:p-16 4xl:gap-16"
+                      >
+                        <div className="flex items-center gap-4 w-full sm:w-auto">
+                          <div className="relative w-[120px] h-[120px] flex-shrink-0 4xl:w-[400px] 4xl:h-[400px]">
+                            <Image
+                              src={product.image}
+                              alt={product.name}
+                              fill
+                              className="object-cover rounded-md 4xl:rounded-2xl"
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="font-medium text-gray-900 4xl:text-4xl">{product.name}</h3>
+                            <div className="flex items-center gap-2 mt-1 4xl:mt-6">
+                              <span className="text-lg font-semibold text-gray-900 4xl:text-4xl">{product.formattedPrice}</span>
+                              {product.cancelledPrice && (
+                                <span className="text-sm text-gray-500 line-through 4xl:text-3xl">
+                                  {product.formattedCancelledPrice}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between w-full sm:w-auto gap-4 4xl:gap-16">
+                          <div className="flex items-center border rounded-md 4xl:rounded-2xl">
+                            <button
+                              onClick={() => handleQuantityChange(product._id, (quantities[product._id] || 1) - 1)}
+                              className="p-2 hover:bg-gray-50 text-gray-600 hover:text-gray-900 4xl:p-8"
+                              aria-label="Decrease quantity"
+                            >
+                              <Minus className="w-4 h-4 4xl:w-12 4xl:h-12" />
+                            </button>
+                            <span className="px-4 py-2 text-gray-900 4xl:px-12 4xl:py-6 4xl:text-3xl">
+                              {quantities[product._id] || 1}
+                            </span>
+                            <button
+                              onClick={() => handleQuantityChange(product._id, (quantities[product._id] || 1) + 1)}
+                              className="p-2 hover:bg-gray-50 text-gray-600 hover:text-gray-900 4xl:p-8"
+                              aria-label="Increase quantity"
+                            >
+                              <Plus className="w-4 h-4 4xl:w-12 4xl:h-12" />
+                            </button>
+                          </div>
+                          <button
+                            onClick={() => removeFromCart(product._id)}
+                            className="p-2 text-gray-500 hover:text-red-500 transition-colors 4xl:p-8"
+                            aria-label="Remove item"
+                          >
+                            <Trash2 className="w-5 h-5 4xl:w-14 4xl:h-14" />
+                          </button>
+                        </div>
                       </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
 
-                      <h1 className="flex-[1] text-center">
-                        Rs. {item.productPrice}
-                      </h1>
-
-                      <div className="flex-[2] flex items-center justify-center space-x-2">
-                        <button
-                          onClick={() =>
-                            handleQuantityChange(
-                              item._id,
-                              (quantities[item._id] || 1) - 1
-                            )
-                          }
-                          className="px-2 py-1 border rounded bg-gray-200 hover:bg-gray-300"
-                        >
-                          -
-                        </button>
-                        <input
-                          type="number"
-                          value={quantities[item._id] || 1}
-                          onChange={(event) =>
-                            handleQuantityChange(
-                              item._id,
-                              parseInt(event.target.value) || 1
-                            )
-                          }
-                          className="w-12 text-center border rounded"
-                          min={1}
-                        />
-                        <button
-                          onClick={() =>
-                            handleQuantityChange(
-                              item._id,
-                              (quantities[item._id] || 1) + 1
-                            )
-                          }
-                          className="px-2 py-1 border rounded bg-gray-200 hover:bg-gray-300"
-                        >
-                          +
-                        </button>
-                      </div>
-
-                      <h1 className="flex-[1] text-center">
-                        Rs. {(quantities[item._id] || 1) * item.productPrice}
-                      </h1>
+            <div className="lg:col-span-1">
+              <div className="bg-white rounded-lg shadow-sm p-6 sticky top-8 4xl:p-20 4xl:top-12 4xl:min-h-[80vh]">
+                <h2 className="text-xl font-semibold text-gray-900 mb-6 4xl:text-5xl 4xl:mb-16">Order Summary</h2>
+                <div className="space-y-4 4xl:space-y-12">
+                  <div className="flex justify-between text-gray-600 4xl:text-3xl">
+                    <span>Subtotal</span>
+                    <span className="font-medium">₹{calculateSubtotal().toLocaleString('en-IN')}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-600 4xl:text-3xl">
+                    <span>Shipping</span>
+                    <span className="text-green-600">Free</span>
+                  </div>
+                  <div className="border-t pt-4 mt-4 4xl:pt-12 4xl:mt-12">
+                    <div className="flex justify-between text-lg font-semibold text-gray-900 4xl:text-4xl">
+                      <span>Total</span>
+                      <span>₹{calculateSubtotal().toLocaleString('en-IN')}</span>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="flex justify-between w-[81%] mx-auto my-4">
-              <div
-                onClick={() => {
-                  window.location.href = "/";
-                }}
-                className="w-fit mx-auto"
-              >
-                <Button text="Return To Shop" width={200}></Button>
-              </div>
-            </div>
-
-            <div className="flex w-[80%] mx-auto justify-center items-center  md:justify-between md:items-start mt-20 flex-col flex-wrap md:flex-row">
-              <div className="flex justify-start  my-6 w-fit">
-                <div className="flex items-center space-x-4 flex-col sm:flex-row gap-1">
-                  <input
-                    type="text"
-                    style={{
-                      height: "50px",
-                      border: "2px solid black",
-                      padding: "3px",
-                      borderRadius: "0.375rem",
-                      margin: "auto",
-                    }}
-                    placeholder="Coupon Code"
-                    className="border rounded px-4 py-2 w-64 focus:outline-none focus:ring focus:ring-red-300"
-                  />
-                  <Button text="Apply Coupon" width={150} />
+                  </div>
                 </div>
-              </div>
-              <div className="flex justify-center my-6 w-[90%] sm:w-fit">
-                <CartTotal subtotal={calculateSubtotal()} />
+                <button
+                  className="w-full bg-[#DB4444] text-white py-3 rounded-md mt-6 font-medium hover:bg-[#c13a3a] transition-colors focus:outline-none focus:ring-2 focus:ring-[#DB4444] focus:ring-offset-2 4xl:py-12 4xl:text-3xl 4xl:rounded-2xl 4xl:mt-16"
+                  onClick={() => {
+                    showAlert("Checkout functionality coming soon!", "success");
+                  }}
+                >
+                  Proceed to Checkout
+                </button>
               </div>
             </div>
-            <Footer />
-          </>
+          </div>
         )}
-      </div>
-    </>
+      </main>
+      <Footer />
+    </div>
   );
 };
 

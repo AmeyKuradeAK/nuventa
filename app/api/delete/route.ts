@@ -1,20 +1,32 @@
-import productModel from "@/models/Product";
 import { NextResponse } from "next/server";
 import { currentUser } from "@clerk/nextjs/server";
-import clientModel from "@/models/Clients";
+import supabase from "@/lib/supabase"; // Import your supabase client from the lib
 
 export async function GET(request: any) {
   const user = await currentUser();
-  const global_user_email = user?.emailAddresses[0].emailAddress;
-  if (user) {
-    try {
-      await clientModel.deleteOne({ email: global_user_email });
-    } catch (error: any) {
-      console.error("in api/propagation/route.ts: ", error);
-      return new NextResponse("404");
-    }
-  } else {
+
+  if (!user) {
     console.log("No sign in found.");
-    return new Response("404");
+    return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  const clerk_id = user.id;
+
+  try {
+    // Delete client row by clerk_id in supabase
+    const { error } = await supabase
+      .from("clients")
+      .delete()
+      .eq("clerk_id", clerk_id);
+
+    if (error) {
+      console.error("Supabase delete client error:", error);
+      return new NextResponse("Failed to delete client", { status: 500 });
+    }
+
+    return new NextResponse("Client deleted", { status: 200 });
+  } catch (error) {
+    console.error("Error in delete GET:", error);
+    return new NextResponse("Internal Server Error", { status: 500 });
   }
 }

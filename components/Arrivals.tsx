@@ -6,9 +6,9 @@ import Link from "next/link";
 
 type mainProp = {
   fragment: {
-    id: any;
+    id: string;
     productName: string;
-    productImages: string;
+    productImages: string[];       // array of URLs
     productPrice: string;
     cancelledProductPrice: string;
     latest: boolean;
@@ -16,8 +16,6 @@ type mainProp = {
 };
 
 export default function Arrivals({ fragment }: mainProp) {
-  //* custom comparator function for sort(a, b).
-  //* used it later in the code. at 42.
   return (
     <>
       <div className="mt-28 md:mt-0 xl:mt-0 lg:mt-0 flex flex-col gap-14">
@@ -25,27 +23,27 @@ export default function Arrivals({ fragment }: mainProp) {
           <Heading
             message="Newest Arrivals"
             secondaryMessage="Nuvante's Atelier"
-          ></Heading>
+          />
           {/* <Link href="/Products">
-            <Button text="View All" width={130}></Button>
+            <Button text="View All" width={130} />
           </Link> */}
         </div>
         <div className="flex flex-col gap-12 w-fit mx-auto">
-          <div className="cards flex flex-wrap sm:gap-x-6 2xl:gap-x-16 gap-x-4 sm:w-auto sm:justify-center justify-center w-[100%] gap-y-16">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6 lg:gap-8 w-full">
             {fragment.map((product, index) => (
               <Card
+                key={product.id}
                 id={product.id}
-                key={index}
                 productName={product.productName}
                 productPrice={Number(product.productPrice)}
                 cancelledPrice={Number(product.cancelledProductPrice)}
-                src={product.productImages[0]}
+                src={product.productImages?.[0] ?? "/fallback-image.jpg"}
                 status={product.latest ? "new" : "old"}
-              ></Card>
+              />
             ))}
           </div>
           <Link href="/Products" className="mx-auto w-fit">
-            <Button text="View All Products" width={220}></Button>
+            <Button text="View All Products" width={220} />
           </Link>
         </div>
       </div>

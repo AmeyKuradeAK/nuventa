@@ -1,19 +1,15 @@
-import type { NextConfig } from "next";
+import { NextConfig } from 'next'
 
-const nextConfig: NextConfig = {
-  /* config options here */
-};
-
-module.exports = {
-  reactStrictMode: false,
+const config: NextConfig = {
   images: {
-    domains: ["https://nuventa.vercel.app/"],
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'cdn.jsdelivr.net',
+        pathname: '/gh/AmeyKuradeAK/nuvante-cdn/**',
+      },
+    ],
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-};
-export default nextConfig;
+}
+
+export default config

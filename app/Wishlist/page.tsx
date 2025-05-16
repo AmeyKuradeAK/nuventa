@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -12,13 +12,13 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import Card from "@/components/Card";
 import axios from "axios";
-import { useState } from "react";
-import { useEffect } from "react";
-import { useContext } from "react";
+import { useUser } from "@clerk/nextjs";
 import { GlobalContext } from "@/context/Global";
+import { useContext } from "react";
 import Image from "next/image";
 import { motion } from "framer-motion";
 import { useParams } from "next/navigation";
+import Alert from "@/components/Alert";
 
 /**
  * 1.Pretty exhausting function (handleBag) running in O(n^2) probably. Considering the post requests to be linear.
@@ -29,77 +29,215 @@ import { useParams } from "next/navigation";
 
 const logo = "/logo.png";
 
-const Page = () => {
-  const [products, setProducts] = useState([]);
-  const [currentWishlist, setCurrentWishlist] = useState([]);
-  const [loaded, setLoaded] = useState(false);
+interface WishlistProduct {
+  _id: string;
+  name: string;
+  price: number;
+  image: string;
+  status?: string;
+}
+
+interface AlertState {
+  show: boolean;
+  message: string;
+  type: "success" | "error";
+}
+
+const Wishlist = () => {
+  const { isSignedIn } = useUser();
+  const [wishlistProducts, setWishlistProducts] = useState<WishlistProduct[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [updatingCart, setUpdatingCart] = useState(false);
+  const [alert, setAlert] = useState<AlertState>({
+    show: false,
+    message: "",
+    type: "success",
+  });
+
+  const context = useContext(GlobalContext);
+  if (!context) throw new Error("GlobalContext is not provided.");
+  const { GlobalWishlist, GlobalCart, changeGlobalCart } = context;
 
   const url_params = useParams();
 
-  const {
-    GlobalWishlist,
-    GlobalCart,
-    changeGlobalWishlist,
-    changeGlobalCart,
-  }: any = useContext(GlobalContext);
+  const showAlert = useCallback((message: string, type: "success" | "error") => {
+    setAlert({ show: true, message, type });
+  }, []);
+
+  const hideAlert = useCallback(() => {
+    setAlert((prev) => ({ ...prev, show: false }));
+  }, []);
+
+  const fetchWishlist = useCallback(async () => {
+    try {
+      console.log("Fetching wishlist..."); // Debug log
+      const response = await axios.post<WishlistProduct[]>("/api/propagation", {
+        type: "wishlist",
+      });
+
+      console.log("Wishlist API response:", response.data); // Debug log
+
+      if (response.status === 200 && Array.isArray(response.data)) {
+        // Ensure each product has all required fields
+        const validProducts = response.data.filter(product => {
+          const isValid = product && 
+            product._id && 
+            product.name && 
+            product.price && 
+            product.image;
+          
+          if (!isValid) {
+            console.log("Invalid product:", product); // Debug log for invalid products
+          }
+          return isValid;
+        }).map(product => ({
+          _id: product._id,
+          name: product.name,
+          price: product.price,
+          image: product.image,
+          status: product.status || "new"
+        }));
+        
+        console.log("Processed wishlist products:", validProducts); // Debug log
+        setWishlistProducts(validProducts);
+      } else {
+        console.error("Invalid response format:", response.data); // Debug log
+        throw new Error("Invalid response format");
+      }
+    } catch (error) {
+      console.error("Error fetching wishlist:", error);
+      const axiosError = error as { response?: { status: number; data?: any } };
+      if (axiosError.response?.status === 404) {
+        console.log("No wishlist found (404)"); // Debug log
+        setWishlistProducts([]);
+      } else {
+        console.error("Wishlist fetch error:", axiosError.response?.data); // Debug log
+        showAlert("Failed to fetch wishlist items", "error");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [showAlert]);
 
   useEffect(() => {
-    const propagate_data = async () => {
-      const localProducts = await axios
-        .post(`/api/propagation/`, {
-          every: true,
-        })
-        .then((response) => {
-          return response.data;
-        });
-      setProducts(localProducts);
-      const currentWishlist = await axios
-        .get(`/api/propagation_client/`)
-        .then((response) => {
-          if (response.data === 404) {
-            console.log(
-              "Couldn't get the current wishlist from the database, try refreshing the page. Developers are supposed to check /api/propagation_client"
-            );
-            return [];
-          } else {
-            return response.data.wishlist;
-          }
-        });
-
-      setCurrentWishlist(currentWishlist);
-      // TODO: remove in production.
-      setTimeout(() => {
-        setLoaded(true);
-      }, 1000);
-    };
-    propagate_data();
-  }, [GlobalWishlist]);
-
-  const handleBag = async () => {
-    for (let i = 0; i < GlobalWishlist.length; ++i) {
-      if (!GlobalCart.includes(GlobalWishlist[i])) {
-        const response = await axios
-          .post(`/api/cart`, {
-            identifier: GlobalWishlist[i],
-            append: true,
-          })
-          .then((res) => {
-            if (res.data === 200) {
-              changeGlobalCart(GlobalWishlist[i]);
-              alert("Cart updated!");
-            } else {
-              alert(
-                "There was an error in updating the cart. Try refreshing the page."
-              );
-            }
-          });
-      }
+    if (isSignedIn) {
+      fetchWishlist();
     }
-  };
+  }, [isSignedIn, fetchWishlist]);
+
+  // Add a debug effect to monitor wishlistProducts
+  useEffect(() => {
+    console.log("Current wishlist products:", wishlistProducts);
+  }, [wishlistProducts]);
+
+  const handleBag = useCallback(async () => {
+    if (updatingCart) return;
+    setUpdatingCart(true);
+
+    try {
+      const itemsToAdd = GlobalWishlist.filter(id => !GlobalCart.includes(id));
+      
+      if (itemsToAdd.length === 0) {
+        showAlert("All items are already in your cart!", "success");
+        setUpdatingCart(false);
+        return;
+      }
+
+      // Optimistically update the UI
+      const optimisticUpdates = itemsToAdd.map(id => {
+        changeGlobalCart(id, true);
+        return id;
+      });
+
+      const results = await Promise.all(
+        itemsToAdd.map(async (id) => {
+          try {
+            const response = await axios.post(`/api/cart`, {
+              identifier: id,
+              append: true,
+            });
+            
+            if (response.status === 200 || response.data === 200) {
+              return { id, success: true };
+            }
+            // Revert optimistic update on failure
+            changeGlobalCart(id, false);
+            return { id, success: false };
+          } catch (error) {
+            console.error(`Error adding item ${id} to cart:`, error);
+            // Revert optimistic update on error
+            changeGlobalCart(id, false);
+            return { id, success: false };
+          }
+        })
+      );
+
+      const successfulUpdates = results.filter(result => result.success);
+      
+      if (successfulUpdates.length > 0) {
+        showAlert(`Successfully added ${successfulUpdates.length} items to your cart!`, "success");
+      }
+
+      if (successfulUpdates.length < itemsToAdd.length) {
+        showAlert("Some items could not be added to your cart. Please try again.", "error");
+      }
+    } catch (error) {
+      console.error("Error updating cart:", error);
+      showAlert("There was an error updating your cart. Please try again.", "error");
+    } finally {
+      setUpdatingCart(false);
+    }
+  }, [updatingCart, GlobalWishlist, GlobalCart, changeGlobalCart, showAlert]);
+
+  if (!isSignedIn) {
+    return (
+      <div className="flex justify-center items-center h-screen">
+        <h1 className="text-2xl">Please sign in to view your wishlist</h1>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div>
+        <Navbar />
+        <div className="flex justify-center items-center h-[80vh]">
+          <motion.div
+            animate={{
+              rotate: 360,
+            }}
+            transition={{
+              duration: 1.5,
+              repeat: Infinity,
+              ease: "linear",
+            }}
+          >
+            <Image src={logo} alt="Loading..." width={60} height={60} />
+          </motion.div>
+        </div>
+        <Footer />
+      </div>
+    );
+  }
+
+  if (!wishlistProducts.length) {
+    return (
+      <div className="flex justify-center items-center h-screen">
+        <h1 className="text-2xl">Your wishlist is empty</h1>
+      </div>
+    );
+  }
 
   return (
     <div>
       <Navbar />
+      {alert.show && (
+        <Alert
+          message={alert.message}
+          type={alert.type}
+          onClose={hideAlert}
+        />
+      )}
       <div className="p-4">
         <div className="mt-6 ml-4 xl:ml-32">
           <Breadcrumb>
@@ -114,64 +252,42 @@ const Page = () => {
             </BreadcrumbList>
           </Breadcrumb>
         </div>
-        {!loaded && (
-          <motion.div
-            className="w-fit mx-auto mt-20"
-            animate={{
-              rotate: 360,
-              transition: {
-                duration: 1.5,
-              },
-            }}
-          >
-            <Image src={logo} alt="preloader" width={60} height={60}></Image>
-          </motion.div>
-        )}
-        {loaded && (
-          <div className="flex flex-col xl:flex-col xl:justify-between xl:w-[1170px] w-full xl:ml-28 mt-8">
-            <div className="flex flex-col xl:flex-row xl:justify-between">
-              <div>
-                <h1 className="p-5">Wishlist ({currentWishlist.length})</h1>
-              </div>
-              <div>
-                <button
-                  className="w-full xl:w-[223px] h-[56px] text-center border border-black"
-                  onClick={handleBag}
-                >
-                  Move All to bag
-                </button>
-              </div>
+        <div className="flex flex-col xl:flex-col xl:justify-between xl:w-[1170px] w-full xl:ml-28 mt-8">
+          <div className="flex flex-col xl:flex-row xl:justify-between">
+            <div>
+              <h1 className="p-5">Wishlist ({wishlistProducts.length})</h1>
             </div>
-
-            <div className="flex flex-col xl:flex-row gap-x-5 w-full mt-7">
-              {products.length &&
-                products.map((product: any, index: any) => {
-                  let smol: any = product._id;
-                  if (currentWishlist.includes(smol)) {
-                    return (
-                      <Card
-                        id={product._id}
-                        key={index}
-                        productName={product.productName}
-                        productPrice={Number(product.productPrice)}
-                        cancelledPrice={product.cancelledProductPrice}
-                        src={
-                          product.productImages[0] === undefined
-                            ? "https://fastly.picsum.photos/id/1050/536/354.jpg?hmac=fjxUSeQRIROZvo_be9xEf-vMhMutXf2F5yw-WaWyaWA"
-                            : product.productImages[0]
-                        }
-                        status={product.latest ? "new" : "old"}
-                      ></Card>
-                    );
-                  }
-                })}
+            <div>
+              <button
+                className={`w-full xl:w-[223px] h-[56px] text-center border border-black ${
+                  updatingCart ? "opacity-50 cursor-not-allowed" : ""
+                }`}
+                onClick={handleBag}
+                disabled={updatingCart}
+              >
+                {updatingCart ? "Moving to cart..." : "Move All to bag"}
+              </button>
             </div>
           </div>
-        )}
+
+          <div className="flex flex-col xl:flex-row gap-x-5 w-full mt-7">
+            {wishlistProducts.map((product) => (
+              <Card
+                key={product._id}
+                id={product._id}
+                src={product.image}
+                productName={product.name}
+                productPrice={product.price}
+                cancelledPrice={product.price * 1.2}
+                status={product.status || "new"}
+              />
+            ))}
+          </div>
+        </div>
       </div>
       <Footer />
     </div>
   );
 };
 
-export default Page;
+export default Wishlist;

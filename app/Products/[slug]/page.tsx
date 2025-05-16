@@ -39,7 +39,7 @@ const Page = () => {
                 <Heading message="Products" secondaryMessage="" />
               </div>
               <div className="flex flex-col gap-12">
-                <div className="cards flex flex-wrap sm:w-auto w-[100%] gap-y-10 gap-x-10">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6 lg:gap-8 w-full">
                   {loaded ? (
                     data.length > 0 ? (
                       data.map((product: any, index: any) =>
